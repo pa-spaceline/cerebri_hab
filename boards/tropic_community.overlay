@@ -1,0 +1,58 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * tropic_community port for cerebri_hab (forked from cerebri_rdd2).
+ *
+ * imu0, rc0, and the flexio1 dshot node are already enabled with
+ * status = "okay" directly in the board-level tropic_community.dts
+ * (modules/lib/zephyr_boards/boards/nxp/tropic_community/), unlike the
+ * vendor-default mimxrt boards - this overlay only maps this app's
+ * expected generic aliases onto those existing labels, plus adds the
+ * GNSS node this app's gnss_source subsystem expects.
+ *
+ * NOT ported here (see boards/tropic_community.conf for why): magnetometer,
+ * barometer, buzzer - this app has no wiring for any of them yet.
+ */
+
+/ {
+	aliases {
+		rc = &rc0;
+		imu0 = &imu0;
+		motors = &dshot;
+		gnss = &gnss0;
+	};
+};
+
+/*
+ * GPS connector, Teensy pins 15/14 (lpuart2, already enabled at board
+ * level at 115200 - confirmed correct baud for the physical module via
+ * byte-level instrumentation, see cerebri/app/hab/boards/tropic_community.overlay
+ * for the full story).
+ *
+ * cerebri_hab's gnss_source subsystem only decodes UBX-NAV-PVT, not plain
+ * NMEA-0183 - the module was confirmed (same byte-level instrumentation)
+ * to be currently outputting plain NMEA, not UBX, by default. Getting this
+ * node to actually work requires reconfiguring the physical module's
+ * output protocol to UBX (e.g. via u-center, saved to its non-volatile
+ * config) - this devicetree node alone does not do that, it only tells
+ * the driver what to expect once the module is actually sending it.
+ */
+&lpuart2 {
+	gnss0: gnss {
+		status = "okay";
+		compatible = "cognipilot,ubx-gnss";
+	};
+};
+
+/*
+ * Reuse the existing, already-correctly-pinned dshot node from the board
+ * dts (5 DShot-capable ESC outputs, confirmed working pin-id assignments)
+ * but switch its compatible to the driver this app vendors under
+ * drivers/nxp_flexio_dshot/, instead of tropic_community's original
+ * "nxp,flexio-dshot" binding. If the two bindings' devicetree properties
+ * don't match exactly, this will fail at build/devicetree-validation time
+ * and need reconciling then.
+ */
+&dshot {
+	compatible = "cognipilot,flexio-dshot";
+};

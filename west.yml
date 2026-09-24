@@ -10,6 +10,8 @@ manifest:
       url-base: https://github.com/zephyrproject-rtos
     - name: cognipilot
       url-base: https://github.com/CogniPilot
+    - name: pa-spaceline
+      url-base: https://github.com/pa-spaceline
 
   projects:
     - name: zephyr
@@ -68,6 +70,6 @@ manifest:
       revision: cb9d8391c8e3c394fd288f2299c2b6758523b1c6 # cerebri2 4/27/26
       path: modules/lib/zenoh-pico
     - name: zephyr_boards
-      remote: cognipilot
-      revision: a21d0040d455e3520816e1a64335ae4a9b740cab # Zephyr main devicetree migration
+      remote: pa-spaceline
+      revision: 27f07d634cdac38d5f92ad50055c906cd6e73fc0 # tropic_community board + ist8310/rc0/wdog0 + main devicetree migration (only on our fork, not upstream)
       path: modules/lib/zephyr_boards
