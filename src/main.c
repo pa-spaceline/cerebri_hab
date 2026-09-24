@@ -4,6 +4,7 @@
 
 #include "attitude_control.h"
 #include "attitude_estimator.h"
+#include "buzzer.h"
 #include "control_io.h"
 #include "flight_mode.h"
 #include "hotpath_memory.h"
@@ -230,6 +231,8 @@ int main(void) {
   rdd2_attitude_estimator_init(&g_attitude_estimator);
   rdd2_rate_controller_init(&g_rate_controller);
   rdd2_imu_latency_stats_reset();
+  rdd2_buzzer_init();
+  rdd2_buzzer_play(rdd2_buzzer_startup_tone, ARRAY_SIZE(rdd2_buzzer_startup_tone));
 
   rc = flight_state_topic_init();
   if (rc != 0) {
@@ -293,6 +296,25 @@ int main(void) {
                ctx->status.throttle_us <= RDD2_THROTTLE_ARM_MAX) {
       ctx->status.armed = true;
     }
+
+    if (ctx->status.armed != was_armed) {
+      if (ctx->status.armed) {
+        rdd2_buzzer_play(rdd2_buzzer_armed_tone,
+                         ARRAY_SIZE(rdd2_buzzer_armed_tone));
+      } else {
+        rdd2_buzzer_play(rdd2_buzzer_disarmed_tone,
+                         ARRAY_SIZE(rdd2_buzzer_disarmed_tone));
+      }
+    } else if (ctx->flight_mode != previous_mode) {
+      if (ctx->flight_mode == RDD2_FLIGHT_MODE_AUTO_LEVEL) {
+        rdd2_buzzer_play(rdd2_buzzer_autolevel_mode_tone,
+                         ARRAY_SIZE(rdd2_buzzer_autolevel_mode_tone));
+      } else {
+        rdd2_buzzer_play(rdd2_buzzer_acro_mode_tone,
+                         ARRAY_SIZE(rdd2_buzzer_acro_mode_tone));
+      }
+    }
+    rdd2_buzzer_update();
 
     run_attitude_update = attitude_update_due(
         ctx->flight_mode, ctx->status.armed, &autolevel_attitude_countdown,

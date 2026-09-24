@@ -6,6 +6,7 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
   attitude_control.c
   attitude_estimator.c
+  buzzer.c
   control_io.c
   flight_mode.c
   imu_stream.c

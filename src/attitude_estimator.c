@@ -4,14 +4,18 @@
 
 #include <math.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include "attitude_estimator.h"
 #include "casadi.h"
 #include "hab.h"
 
 /* Magnetic declination at the launch site, radians, east-positive - same
- * placeholder pattern as cerebri/app/hab's decl_WL. Update for wherever the
- * balloon actually launches from before flight. */
-static const double RDD2_MAG_DECL_RAD = 0.0;
+ * value cerebri/app/hab uses (Odense, Denmark, NOAA WMM2025). Update if the
+ * balloon ends up launching from somewhere else. */
+static const double RDD2_MAG_DECL_RAD = 4.38 / 180.0 * M_PI;
 
 static const double RDD2_ATTITUDE_ACCEL_GAIN = 40.0 * 1e-3;
 static const double RDD2_ATTITUDE_MAG_GAIN = 40.0 * 1e-3;

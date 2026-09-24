@@ -10,9 +10,10 @@
  * expected generic aliases onto those existing labels, plus adds the
  * GNSS node this app's gnss_source subsystem expects.
  *
- * NOT ported here (see boards/tropic_community.conf for why): barometer,
- * buzzer - this app has no wiring for either yet. Magnetometer (ist8310, on
- * lpi2c1) IS wired now, for the cyecca attitude estimator's yaw correction.
+ * NOT ported here (see boards/tropic_community.conf for why): barometer -
+ * this app has no position/altitude estimation to feed it yet. Magnetometer
+ * (ist8310, on lpi2c1) and buzzer (buzzer0, PWM tone on flexpwm3_pwm1) ARE
+ * wired now - see attitude_estimator.c/main.c and buzzer.c respectively.
  */
 
 / {
@@ -22,6 +23,7 @@
 		mag0 = &ist8310;
 		motors = &dshot;
 		gnss = &gnss0;
+		buzzer = &buzzer0;
 	};
 };
 
