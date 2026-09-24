@@ -163,10 +163,34 @@ rdd2_add_efmi_control_model(
   Vehicles_Rdd2_Controller
 )
 
-rdd2_add_efmi_control_model(
-  Estimation/ComplementaryAttitude.mo
-  Estimation.ComplementaryAttitude
-  Estimation_ComplementaryAttitude
+# Attitude estimation uses cyecca/CasADi instead of Rumoca/eFMI (see
+# attitude_estimator.c) - cyecca's attitude_estimator does real
+# magnetometer-based yaw correction, which Estimation.ComplementaryAttitude
+# (gyro+accel only) never did.
+set(CYECCA_PYTHON ${CMAKE_CURRENT_SOURCE_DIR}/scripts/cyecca_python)
+set(CYECCA_PATH $ENV{ZEPHYR_BASE}/../modules/lib/cyecca)
+set(CASADI_DEST_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/casadi)
+
+add_custom_command(OUTPUT ${CASADI_DEST_DIR}/hab.c ${CASADI_DEST_DIR}/hab.h
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CASADI_DEST_DIR}
+  COMMAND ${CYECCA_PYTHON} ${CYECCA_PATH}/cyecca/models/hab.py ${CASADI_DEST_DIR}
+  DEPENDS ${CYECCA_PATH}/cyecca/models/hab.py
+  COMMENT "Generating hab.c/hab.h with cyecca/CasADi"
+  VERBATIM
+)
+
+add_custom_target(rdd2_hab_casadi_codegen
+  DEPENDS ${CASADI_DEST_DIR}/hab.c
+)
+
+add_dependencies(app rdd2_hab_casadi_codegen)
+
+set_source_files_properties(${CASADI_DEST_DIR}/hab.c
+  PROPERTIES GENERATED TRUE
+)
+
+target_sources(app PRIVATE
+  ${CASADI_DEST_DIR}/hab.c
 )
 
 add_custom_target(rdd2_efmi_control_codegen
@@ -194,6 +218,7 @@ endif()
 target_include_directories(app PRIVATE
   include
   ${CMAKE_CURRENT_BINARY_DIR}/generated
+  ${CASADI_DEST_DIR}
   ${RDD2_EFMI_CONTROL_INCLUDE_DIRS}
   ${ZEPHYR_BASE}/../modules/hal/nxp/mcux/mcux-sdk-ng/drivers/flexio
 )

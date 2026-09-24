@@ -10,14 +10,16 @@
  * expected generic aliases onto those existing labels, plus adds the
  * GNSS node this app's gnss_source subsystem expects.
  *
- * NOT ported here (see boards/tropic_community.conf for why): magnetometer,
- * barometer, buzzer - this app has no wiring for any of them yet.
+ * NOT ported here (see boards/tropic_community.conf for why): barometer,
+ * buzzer - this app has no wiring for either yet. Magnetometer (ist8310, on
+ * lpi2c1) IS wired now, for the cyecca attitude estimator's yaw correction.
  */
 
 / {
 	aliases {
 		rc = &rc0;
 		imu0 = &imu0;
+		mag0 = &ist8310;
 		motors = &dshot;
 		gnss = &gnss0;
 	};
