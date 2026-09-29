@@ -15,10 +15,10 @@ manifest:
 
   projects:
     - name: zephyr
-      remote: cognipilot
-      # branch: rdd2-upstream-main
-      # pinned: 2026-08-05
-      revision: bf19ff6eb2cff5aac91242af56b514273cdf9a94
+      remote: pa-spaceline
+      # branch: tropic-community-zephyr-main (CogniPilot bf19ff6, rdd2-upstream-main
+      # 2026-08-05, plus the mcux_lpuart single-wire RSRC fix)
+      revision: 6e133e5521e3458811a1149b96f2f9353ac8f68e
       path: zephyr
       west-commands: scripts/west-commands.yml
     - name: cmsis
@@ -75,5 +75,5 @@ manifest:
       path: modules/lib/zenoh-pico
     - name: zephyr_boards
       remote: pa-spaceline
-      revision: 27f07d634cdac38d5f92ad50055c906cd6e73fc0 # tropic_community board + ist8310/rc0/wdog0 + main devicetree migration (only on our fork, not upstream)
+      revision: 41e5e8b201841bdfe04c41b04b08ed258794aa39 # tropic-community-zephyr-main: tropic_community board for Zephyr main, incl. FlexSPI flash-node fix (only on our fork, not upstream)
       path: modules/lib/zephyr_boards

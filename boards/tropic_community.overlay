@@ -59,4 +59,9 @@
  */
 &dshot {
 	compatible = "cognipilot,flexio-dshot";
+
+	/* main() requires exactly four motor channels (rdd2 is a quadrotor)
+	 * and exits otherwise; the board exposes five DShot outputs.
+	 */
+	/delete-node/ ch5;
 };
