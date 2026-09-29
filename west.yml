@@ -17,8 +17,9 @@ manifest:
     - name: zephyr
       remote: pa-spaceline
       # branch: tropic-community-zephyr-main (CogniPilot bf19ff6, rdd2-upstream-main
-      # 2026-08-05, plus the mcux_lpuart single-wire RSRC fix)
-      revision: 6e133e5521e3458811a1149b96f2f9353ac8f68e
+      # 2026-08-05, plus the mcux_lpuart single-wire RSRC fix and the ist8310
+      # not-ready re-trigger fix)
+      revision: ecfbf6b8222794d0260149e7a0b305e7b6d7ca06
       path: zephyr
       west-commands: scripts/west-commands.yml
     - name: cmsis

@@ -15,7 +15,10 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
+#include <zephyr/shell/shell.h>
 #include <zephyr/spinlock.h>
+
+#include <math.h>
 
 #define MAG_NODE DT_ALIAS(mag0)
 
@@ -35,6 +38,8 @@ static struct k_spinlock g_mag_lock;
 static rdd2_vec3f_t g_mag;
 static int64_t g_mag_stamp_ms;
 static bool g_mag_valid;
+static uint32_t g_mag_reads;
+static uint32_t g_mag_failed;
 
 static bool mag_fetch(rdd2_vec3f_t *mag)
 {
@@ -72,7 +77,10 @@ static void mag_thread(void *arg0, void *arg1, void *arg2)
 			g_mag = mag;
 			g_mag_stamp_ms = k_uptime_get();
 			g_mag_valid = true;
+			g_mag_reads++;
 			k_spin_unlock(&g_mag_lock, key);
+		} else {
+			g_mag_failed++;
 		}
 		k_sleep(K_MSEC(RDD2_MAG_PERIOD_MS));
 	}
@@ -92,6 +100,50 @@ bool rdd2_mag_latest(rdd2_vec3f_t *mag)
 	k_spin_unlock(&g_mag_lock, key);
 	return ok;
 }
+
+/* Reports the reader's newest sample rather than fetching: the sensor is
+ * single-shot, so a second reader would steal the conversion from the thread
+ * and fail itself whenever it lands inside one. */
+static int cmd_mag_status(const struct shell *sh, size_t argc, char **argv)
+{
+	rdd2_vec3f_t mag;
+	int64_t stamp_ms;
+	uint32_t reads;
+	uint32_t failed;
+	bool valid;
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	key = k_spin_lock(&g_mag_lock);
+	mag = g_mag;
+	stamp_ms = g_mag_stamp_ms;
+	valid = g_mag_valid;
+	reads = g_mag_reads;
+	failed = g_mag_failed;
+	k_spin_unlock(&g_mag_lock, key);
+
+	shell_print(sh, "device=%s reads=%u failed=%u", g_mag_dev->name, (unsigned int)reads,
+		    (unsigned int)failed);
+	if (!valid) {
+		shell_warn(sh, "no sample yet");
+		return 0;
+	}
+
+	shell_print(sh, "last sample %lld ms ago%s", k_uptime_get() - stamp_ms,
+		    rdd2_mag_latest(&mag) ? "" : " (stale, estimator ignores it)");
+	shell_print(sh, "xyz=(%.4f, %.4f, %.4f) G  |B|=%.4f G", (double)mag.x, (double)mag.y,
+		    (double)mag.z,
+		    (double)sqrtf(mag.x * mag.x + mag.y * mag.y + mag.z * mag.z));
+	return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_mag,
+	SHELL_CMD(status, NULL, "newest sample from the mag reader thread", cmd_mag_status),
+	SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(mag, &sub_mag, "magnetometer reader diagnostics", NULL);
 
 #else
 
