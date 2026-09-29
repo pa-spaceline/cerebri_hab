@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <zephyr/dt-bindings/i2c/i2c.h>
+
 /*
  * tropic_community port for cerebri_hab (forked from cerebri_rdd2).
  *
@@ -43,6 +45,22 @@
 		status = "okay";
 		compatible = "cognipilot,ubx-gnss";
 	};
+};
+
+/* GPS-connector I2C, carrying only the module's IST8310. Fast mode cuts each
+ * mag fetch from about 1.6 ms to about 0.4 ms of bus time. */
+&lpi2c1 {
+	clock-frequency = <I2C_BITRATE_FAST>;
+};
+
+/*
+ * The board dts leaves imu0 at 100 Hz. This app polls it once per 1600 Hz
+ * control tick (the ICM42670P has no stream path in imu_stream.c), so at
+ * 100 Hz most ticks would re-read the same sample.
+ */
+&imu0 {
+	accel-hz = <1600>;
+	gyro-hz = <1600>;
 };
 
 /*

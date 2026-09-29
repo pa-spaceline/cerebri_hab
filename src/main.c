@@ -10,6 +10,7 @@
 #include "hotpath_memory.h"
 #include "imu_latency_stats.h"
 #include "imu_stream.h"
+#include "mag_source.h"
 #include "motor_output.h"
 #include "rate_control.h"
 #include "topic_bus.h"
@@ -17,7 +18,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -29,32 +29,6 @@
 #include <csyn/csyn.h>
 
 LOG_MODULE_REGISTER(rdd2, LOG_LEVEL_INF);
-
-/* Magnetometer for yaw correction (see attitude_estimator.c) - polled at the
- * attitude-update rate (100-200 Hz, see attitude_update_due() below), not
- * the full 1600 Hz rate loop. ist8310's sample_fetch is a quick, non-
- * blocking status-register read that either returns a completed single-shot
- * conversion or -EIO immediately (no wait loop, see ist8310.c) - safe to
- * call at this rate even though the sensor's own conversion cycle is
- * slower (~6 ms/~166 Hz max). */
-#define MAG_NODE DT_ALIAS(mag0)
-static const struct device *const g_mag_dev = DEVICE_DT_GET(MAG_NODE);
-
-static bool read_mag(rdd2_vec3f_t *mag) {
-  struct sensor_value mag_values[3];
-
-  if (sensor_sample_fetch(g_mag_dev) < 0) {
-    return false;
-  }
-  if (sensor_channel_get(g_mag_dev, SENSOR_CHAN_MAGN_XYZ, mag_values) < 0) {
-    return false;
-  }
-
-  mag->x = sensor_value_to_float(&mag_values[0]);
-  mag->y = sensor_value_to_float(&mag_values[1]);
-  mag->z = sensor_value_to_float(&mag_values[2]);
-  return true;
-}
 
 struct control_context {
   rdd2_vec3f_t gyro;
@@ -343,7 +317,7 @@ int main(void) {
 
     if (!ctx->status.armed) {
       if (ctx->status.imu_ok && run_attitude_update) {
-        ctx->mag_ok = read_mag(&ctx->mag);
+        ctx->mag_ok = rdd2_mag_latest(&ctx->mag);
         rdd2_attitude_estimator_reset(&g_attitude_estimator, &ctx->accel,
                                       &ctx->mag, ctx->mag_ok);
         rdd2_attitude_estimator_get_attitude(&g_attitude_estimator,
@@ -369,7 +343,7 @@ int main(void) {
       };
 
       attitude_dt = attitude_dt_accum;
-      ctx->mag_ok = read_mag(&ctx->mag);
+      ctx->mag_ok = rdd2_mag_latest(&ctx->mag);
       rdd2_attitude_estimator_predict(&g_attitude_estimator, &avg_gyro,
                                       &avg_accel, &ctx->mag, ctx->mag_ok,
                                       attitude_dt);

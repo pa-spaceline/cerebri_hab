@@ -11,6 +11,7 @@ target_sources(app PRIVATE
   flight_mode.c
   imu_stream.c
   imu_latency_stats.c
+  mag_source.c
   main.c
   motor_output.c
   rc_input.c
