@@ -30,6 +30,10 @@ static int cmd_gnss_status(const struct shell *sh, size_t argc, char **argv)
 		    (unsigned int)stats.frames, (unsigned int)stats.other_frames,
 		    (unsigned int)stats.checksum_errors, (unsigned int)stats.bad_length,
 		    (unsigned int)stats.oversize, (unsigned int)stats.ring_overrun);
+	if (IS_ENABLED(CONFIG_RDD2_GNSS_UBX_CONFIGURE)) {
+		shell_print(sh, "cfg  sent=%u ack=%u nak=%u", (unsigned int)stats.cfg_sent,
+			    (unsigned int)stats.cfg_ack, (unsigned int)stats.cfg_nak);
+	}
 	shell_print(sh, "pvt  samples=%u published=%u failed=%u", (unsigned int)stats.samples,
 		    (unsigned int)stats.published, (unsigned int)stats.publish_failed);
 

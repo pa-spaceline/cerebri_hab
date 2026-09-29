@@ -33,13 +33,10 @@
  * byte-level instrumentation, see cerebri/app/hab/boards/tropic_community.overlay
  * for the full story).
  *
- * cerebri_hab's gnss_source subsystem only decodes UBX-NAV-PVT, not plain
- * NMEA-0183 - the module was confirmed (same byte-level instrumentation)
- * to be currently outputting plain NMEA, not UBX, by default. Getting this
- * node to actually work requires reconfiguring the physical module's
- * output protocol to UBX (e.g. via u-center, saved to its non-volatile
- * config) - this devicetree node alone does not do that, it only tells
- * the driver what to expect once the module is actually sending it.
+ * cerebri_hab's gnss_source subsystem only decodes UBX-NAV-PVT, and the
+ * module's saved configuration outputs plain NMEA. CONFIG_RDD2_GNSS_UBX_CONFIGURE
+ * (set in tropic_community.conf) has the reader switch it to UBX in RAM at
+ * every boot, so no u-center step is needed.
  */
 &lpuart2 {
 	gnss0: gnss {

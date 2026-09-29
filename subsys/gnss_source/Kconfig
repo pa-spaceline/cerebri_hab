@@ -31,8 +31,9 @@ config RDD2_GNSS_SOURCE_ONBOARD
 	  streams it out as telemetry. This is the default whenever the
 	  devicetree gnss node is enabled.
 
-	  Decodes UBX-NAV-PVT, which the receiver streams unprompted, so
-	  nothing is sent to the module and no configuration is required. That
+	  Decodes UBX-NAV-PVT. By default nothing is sent to the module, so it
+	  must already be configured to stream that message; see
+	  RDD2_GNSS_UBX_CONFIGURE to have the reader request it at boot. That
 	  one message also carries the accuracy estimates NMEA cannot express,
 	  so the fix is published with real horizontal, vertical and velocity
 	  accuracy rather than the "unusable" sentinel.
@@ -60,6 +61,52 @@ config RDD2_GNSS_UBX_RX_RING_SIZE
 	  Must hold one poll period of line rate: at 115200 baud a 5 ms period
 	  is about 58 bytes, so the default leaves generous headroom for burst
 	  arrival.
+
+config RDD2_GNSS_UBX_CONFIGURE
+	bool "Configure the receiver for UBX NAV-PVT at boot"
+	help
+	  Sends UBX CFG-VALSET to the module's RAM layer at boot: UBX output
+	  on, NAV-PVT on every solution, and the measurement rate below, the
+	  same approach PX4 takes. The saved configuration is never written,
+	  so a power cycle returns the module to it. Needs a u-blox M9/M10 or
+	  newer (CFG-VALSET) and the module already at current-speed.
+
+	  Rounds repeat until the first NAV-PVT arrives, up to the attempt
+	  limit below.
+
+if RDD2_GNSS_UBX_CONFIGURE
+
+config RDD2_GNSS_UBX_MEAS_RATE_MS
+	int "Measurement period in milliseconds"
+	default 200
+	range 25 10000
+	help
+	  CFG-RATE-MEAS. 200 ms is 5 Hz. With the M10's default four
+	  constellations the module may not reach rates much faster than this.
+
+config RDD2_GNSS_UBX_DISABLE_NMEA
+	bool "Turn NMEA output off"
+	default y
+	help
+	  The reader ignores NMEA, so leaving it on only spends UART
+	  bandwidth.
+
+config RDD2_GNSS_UBX_CONFIG_DELAY_MS
+	int "Delay before the first configuration round"
+	default 500
+	range 0 10000
+
+config RDD2_GNSS_UBX_CONFIG_RETRY_MS
+	int "Interval between configuration rounds"
+	default 1000
+	range 100 10000
+
+config RDD2_GNSS_UBX_CONFIG_ATTEMPTS
+	int "Maximum configuration rounds"
+	default 10
+	range 1 100
+
+endif # RDD2_GNSS_UBX_CONFIGURE
 
 config RDD2_GNSS_UBX_POLL_MS
 	int "Reader thread poll period in milliseconds"

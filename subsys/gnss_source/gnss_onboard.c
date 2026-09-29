@@ -3,11 +3,13 @@
  *
  * Onboard u-blox receiver -> synapse gnss topic, read as UBX.
  *
- * The module streams UBX-NAV-PVT unprompted, so this is receive-only: it sends
- * the receiver nothing and configures nothing, which keeps it working whatever
- * output rate the module happens to be set to. NAV-PVT alone carries every
- * field the GnssFix contract wants, including the accuracy estimates NMEA has
- * no way to express.
+ * NAV-PVT alone carries every field the GnssFix contract wants, including the
+ * accuracy estimates NMEA has no way to express. By default the reader is
+ * receive-only and relies on the module's saved configuration to stream it.
+ * With RDD2_GNSS_UBX_CONFIGURE the reader instead asks for it at every boot,
+ * the way PX4 does: UBX CFG-VALSET to the RAM layer only, so the module's
+ * saved configuration is never touched and a power cycle restores it. Modules
+ * shipped with NMEA-only output then work without a trip through u-center.
  *
  * A dedicated thread rather than a workqueue is deliberate. SPEC_0005 forbids
  * GNSS threads justified only by convenience, but the alternative here is the
@@ -28,6 +30,7 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/modem/ubx/keys.h>
 #include <zephyr/modem/ubx/protocol.h>
 #include <zephyr/sys/ring_buffer.h>
 #include <zephyr/sys/util.h>
@@ -87,6 +90,44 @@ static uint8_t g_payload[UBX_MAX_PAYLOAD];
 static uint8_t g_checksum[2];
 static uint16_t g_pos;
 static uint16_t g_len;
+
+#if defined(CONFIG_RDD2_GNSS_UBX_CONFIGURE)
+/* Each frame carries its checksum, computed at compile time. The key names
+ * say UART1 because that is the module's port, whatever the host UART is. */
+UBX_FRAME_DEFINE(cfg_out_ubx, UBX_FRAME_CFG_VAL_SET_U8_INITIALIZER(UBX_KEY_UART1_PROTO_OUT_UBX, 1));
+UBX_FRAME_DEFINE(cfg_nav_pvt,
+		 UBX_FRAME_CFG_VAL_SET_U8_INITIALIZER(UBX_KEY_MSG_OUT_UBX_NAV_PVT_UART1, 1));
+UBX_FRAME_DEFINE(cfg_rate, UBX_FRAME_CFG_VAL_SET_U16_INITIALIZER(
+				   UBX_KEY_RATE_MEAS, CONFIG_RDD2_GNSS_UBX_MEAS_RATE_MS));
+#if defined(CONFIG_RDD2_GNSS_UBX_DISABLE_NMEA)
+UBX_FRAME_DEFINE(cfg_out_nmea,
+		 UBX_FRAME_CFG_VAL_SET_U8_INITIALIZER(UBX_KEY_UART1_PROTO_OUT_NMEA, 0));
+#endif
+
+static const struct ubx_frame *const g_cfg_frames[] = {
+	&cfg_out_ubx,
+	&cfg_nav_pvt,
+	&cfg_rate,
+#if defined(CONFIG_RDD2_GNSS_UBX_DISABLE_NMEA)
+	&cfg_out_nmea,
+#endif
+};
+
+/* Polled out from the reader thread: a few dozen bytes, a few milliseconds of
+ * line time, and the thread is preemptible, so the control loop never waits. */
+static void send_config(void)
+{
+	for (size_t i = 0U; i < ARRAY_SIZE(g_cfg_frames); i++) {
+		const uint8_t *bytes = (const uint8_t *)g_cfg_frames[i];
+		size_t size = UBX_FRAME_SZ(g_cfg_frames[i]->payload_size);
+
+		for (size_t j = 0U; j < size; j++) {
+			uart_poll_out(g_uart, bytes[j]);
+		}
+	}
+	g_stats.cfg_sent++;
+}
+#endif
 
 void rdd2_gnss_onboard_stats_get(struct rdd2_gnss_onboard_stats *stats)
 {
@@ -276,6 +317,14 @@ static void frame_complete(void)
 
 	g_stats.frames++;
 
+	if (g_header[0] == UBX_CLASS_ID_ACK) {
+		if (g_header[1] == UBX_MSG_ID_ACK) {
+			g_stats.cfg_ack++;
+		} else if (g_header[1] == UBX_MSG_ID_NAK) {
+			g_stats.cfg_nak++;
+		}
+	}
+
 	if (g_header[0] != UBX_CLASS_ID_NAV || g_header[1] != UBX_NAV_PVT_ID) {
 		g_stats.other_frames++;
 		return;
@@ -353,8 +402,24 @@ static void gnss_thread(void *arg0, void *arg1, void *arg2)
 	ARG_UNUSED(arg1);
 	ARG_UNUSED(arg2);
 
+#if defined(CONFIG_RDD2_GNSS_UBX_CONFIGURE)
+	/* The module powers up with the board and may not be listening yet, so
+	 * the request repeats until NAV-PVT shows it took, within a bound. RAM
+	 * settings are idempotent, so a repeat the module did hear is harmless. */
+	int64_t next_cfg_ms = k_uptime_get() + CONFIG_RDD2_GNSS_UBX_CONFIG_DELAY_MS;
+#endif
+
 	while (true) {
 		uint32_t read;
+
+#if defined(CONFIG_RDD2_GNSS_UBX_CONFIGURE)
+		if (g_stats.samples == 0U &&
+		    g_stats.cfg_sent < CONFIG_RDD2_GNSS_UBX_CONFIG_ATTEMPTS &&
+		    k_uptime_get() >= next_cfg_ms) {
+			send_config();
+			next_cfg_ms = k_uptime_get() + CONFIG_RDD2_GNSS_UBX_CONFIG_RETRY_MS;
+		}
+#endif
 
 		while ((read = ring_buf_get(&g_ring, buf, sizeof(buf))) > 0U) {
 			for (uint32_t i = 0U; i < read; i++) {
@@ -397,8 +462,9 @@ static int gnss_onboard_init(void)
 			NULL, NULL, CONFIG_RDD2_GNSS_UBX_THREAD_PRIORITY, 0, K_NO_WAIT);
 	k_thread_name_set(&g_thread, "gnss_ubx");
 
-	LOG_INF("ubx reader on %s at %u baud", DT_NODE_FULL_NAME(GNSS_UART),
-		(unsigned int)DT_PROP(GNSS_UART, current_speed));
+	LOG_INF("ubx reader on %s at %u baud%s", DT_NODE_FULL_NAME(GNSS_UART),
+		(unsigned int)DT_PROP(GNSS_UART, current_speed),
+		IS_ENABLED(CONFIG_RDD2_GNSS_UBX_CONFIGURE) ? ", configuring receiver" : "");
 
 	return 0;
 }

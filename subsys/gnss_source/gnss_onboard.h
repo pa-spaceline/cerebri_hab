@@ -21,6 +21,9 @@ struct rdd2_gnss_onboard_stats {
 	uint32_t bad_length;
 	uint32_t oversize;
 	uint32_t ring_overrun;
+	uint32_t cfg_sent;        /* configuration rounds sent, if configuring */
+	uint32_t cfg_ack;         /* UBX-ACK-ACK frames received */
+	uint32_t cfg_nak;         /* UBX-ACK-NAK frames received */
 	int64_t last_sample_ms;   /* 0 until the first sample arrives */
 	uint8_t last_fix_type;
 	uint8_t last_satellites;
