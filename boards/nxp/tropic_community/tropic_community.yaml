@@ -1,0 +1,31 @@
+#
+# Copyright 2026 CogniPilot Foundation
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+identifier: tropic_community
+name: NXP-Robotics Tropic Community VMU
+type: mcu
+arch: arm
+toolchain:
+  - zephyr
+  - gnuarmemb
+ram: 768
+flash: 8192
+supported:
+  - can
+  - counter
+  - gpio
+  - i2c
+  - led
+  - netif:eth
+  - pwm
+  - sdhc
+  - spi
+  - usb_device
+vendor: nxp
+testing:
+  ignore_tags:
+    - net
+    - posix

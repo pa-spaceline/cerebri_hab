@@ -1,0 +1,6 @@
+board:
+  name: tropic_community
+  full_name: NXP-Robotics Tropic Community VMU
+  vendor: nxp
+  socs:
+    - name: mimxrt1062

@@ -1,0 +1,48 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * tropic_community (NXP-Robotics TropicCommunityVMU, a Teensy 4.1 based
+ * i.MX RT1062 board). The board definition lives in boards/nxp/tropic_community/.
+ * imu0, rc0 (CRSF) and the flexio1 dshot node are enabled in the board dts; this
+ * overlay maps the app's aliases onto them and adds the GNSS node.
+ */
+
+/ {
+	aliases {
+		rc = &rc0;
+		imu0 = &imu0;
+		motors = &dshot;
+		gnss = &gnss0;
+	};
+};
+
+/*
+ * GPS connector, Teensy pins 15/14 (lpuart2, 115200 in the board dts). The
+ * reader decodes UBX NAV-PVT only. The M10 on this board is saved as
+ * NMEA-only, so it produces no fix until the module is set to UBX output.
+ */
+&lpuart2 {
+	gnss0: gnss {
+		status = "okay";
+		compatible = "cognipilot,ubx-gnss";
+	};
+};
+
+/*
+ * The board dts leaves imu0 at 100 Hz. The app polls it once per control tick
+ * (the ICM42670P has no stream path in the IMU interface), so run it at the
+ * next rate above the 800 Hz loop.
+ */
+&imu0 {
+	accel-hz = <1600>;
+	gyro-hz = <1600>;
+};
+
+/*
+ * Use the app's DShot driver on the board's DShot node. The motor interface
+ * requires exactly four channels (quadrotor); the board has five outputs.
+ */
+&dshot {
+	compatible = "cognipilot,flexio-dshot";
+	/delete-node/ ch5;
+};

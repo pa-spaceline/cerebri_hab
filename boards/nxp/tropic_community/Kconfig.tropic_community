@@ -1,0 +1,12 @@
+# Copyright 2026 CogniPilot Foundation
+# SPDX-License-Identifier: Apache-2.0
+
+# NXP's own Teensy 4.1 module datasheet marks this part DVJ6B, but Zephyr's
+# NXP HAL only ships Kconfig/pinctrl support for the DVL6A package variant
+# of the RT1062 (same die, different package/speed grade) - this matches
+# what the upstream "teensy41" board itself selects.
+config BOARD_TROPIC_COMMUNITY
+	select SOC_PART_NUMBER_MIMXRT1062DVL6A
+	select BOARD_EARLY_INIT_HOOK
+	select LED
+	select LED_PWM

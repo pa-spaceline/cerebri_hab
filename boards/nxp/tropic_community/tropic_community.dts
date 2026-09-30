@@ -1,0 +1,553 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Copyright (c) 2020, Bernhard Kraemer
+ * Copyright 2026 CogniPilot Foundation
+ */
+
+/*
+ * NXP-Robotics "Tropic Community VMU" (Teensy 4.1 / MIMXRT1062DVJ6B based
+ * carrier board): https://github.com/NXP-Robotics/TropicCommunityVMU
+ *
+ * This board is built on top of the upstream "teensy41" board (same MCU
+ * module, same flash chip, same teensy-loader-cli flashing) - the base
+ * SoC/flash/USB/network/SD sections below are taken unmodified from that
+ * board's teensy40.dts/teensy41.dts. Everything past that point is this
+ * carrier board's own sensors/actuators/connectors, built the way the
+ * sibling "mr_vmu_tropic" board in this same repo does it: hardware wired
+ * here in the board's own dts/board.c, with the app (cerebri) only
+ * mapping generic aliases onto these chip labels.
+ *
+ * Sensor set and every pin below are taken from the board owner's actual
+ * schematic ("Tropic-VMU_Modified_Mag_same_IMU" rev C) plus the physical
+ * Teensy 4.1 pin number behind each net (confirmed against PJRC's own
+ * teensy4/core_pins.h, ARDUINO_TEENSY41 block), which was then looked up in
+ * hal_nxp's mimxrt1062dvl6a-pinctrl.dtsi to get the exact peripheral/alt-
+ * function for each pad. Differs from the stock BOM (PX4's tropic-community
+ * port) as follows:
+ *   - Two identical ICM-42670-P IMUs (pin/register compatible with the
+ *     ICM-42688-P footprint they replace) instead of ICM-42688-P + BMI088
+ *   - Bosch BME280 barometer instead of BMP388 (I2C 0x76)
+ *   - Bosch BMM350 magnetometer instead of BMM150 (I2C 0x14)
+ *   - Both baro and mag share one internal I2C bus ("BARO_MAG_SDA/SCL")
+ *
+ * Net -> Teensy pin -> pad -> peripheral, as wired below:
+ *   SPI1_CS/SCK/MISO/MOSI  10/13/12/11  B0_00/03/01/02       -> lpspi4 (imu0)
+ *   SPI2_CS/SCK/MISO/MOSI  38/27/39/26  AD_B1_12/15/13/14    -> lpspi3 (imu1)
+ *   BARO_MAG_SCL/SDA       24/25        AD_B0_12/13          -> lpi2c4
+ *   EXT_SCL/SDA            19/18        AD_B1_00/01          -> lpi2c1
+ *   CAN_TX/RX              31/30        EMC_36/37            -> flexcan3
+ *   PWM_1/2/3/5/6      4/33/5/2/3   EMC_06/07/08/04/05    -> flexio1 (dshot)
+ *   GPS_TX/RX               14/15        AD_B1_02/03          -> lpuart2
+ *   TELEM_TX/RX/RTS/CTS 17/16/41/40  AD_B1_06/07/05/04     -> lpuart3
+ *   DEBUG_TX/RX             35/34        B1_12/13             -> lpuart5
+ *   RC_INPUT                20           AD_B1_10 (lpuart8_tx) -> lpuart8
+ *                                        (single-wire; RX pin doubles as
+ *                                        ADC_A below, so RX is NOT wired)
+ *
+ * All of the above line up exactly with what the upstream "teensy41"
+ * board's default pinctrl already wires those peripherals to (see
+ * tropic_community-pinctrl.dtsi's own "Teensy-Pins" comments, carried
+ * over unmodified from that board), so none of them need a pinctrl
+ * override except lpuart3 (its default pinctrl only covers TX/RX, not
+ * the RTS/CTS pair this board actually has wired) and lpuart8 (single-
+ * wire, TX pin only).
+ *
+ * The default zephyr,console/shell-uart is lpuart5 (the DEBUG connector),
+ * not lpuart6 (the "teensy41" board's own default), since lpuart6's pins
+ * (Teensy 0/1) are LED_R/LED_B on this board (see below).
+ *
+ * PWM_4 (Teensy pin 9, GPIO_B0_11) is a plain FlexPWM channel, not FlexIO,
+ * so it is not usable by this repo's "nxp,flexio-dshot" driver and is left
+ * unwired (6th ESC output unavailable).
+ *
+ * ARM safety switch, BUZZER and LED_G are wired below the same way
+ * mr_vmu_tropic does it, since cerebri's drivers/sense/safety/main.c and
+ * CEREBRI_ACTUATE_SOUND expect exactly those devicetree shapes regardless
+ * of board:
+ *   - ARM (Teensy pin 32, GPIO_B0_12 = GPIO2 IO12): a /gpio_keys node
+ *     (cerebri's drivers/sense/safety/main.c does
+ *     INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_PATH(gpio_keys)), ...) and
+ *     filters on INPUT_KEY_0)
+ *   - BUZZER (Teensy pin 29, GPIO_EMC_31, FlexPWM3 submodule1 channel A -
+ *     matches PX4's TONE_ALARM_CHANNEL): a "pwm-leds" child node, same
+ *     pattern as mr_vmu_tropic's &flexpwm1_pwm0/buzzer0
+ *   - LED_G (Teensy pin 37, GPIO_B1_03, FlexPWM2 submodule3 channel B):
+ *     a "pwm-leds" child node, same pattern as the buzzer
+ *
+ * LED_R/LED_B (Teensy pins 0/1, AD_B0_02/03) are driven via the XBAR1
+ * crossbar into Quad Timer 4 (matches PX4's PWM_LED_RED/BLUE) - no
+ * devicetree binding covers that, so board.c does the one-time XBAR/
+ * GPR6/QTMR4 register setup in C (every value in that file is traced to
+ * the i.MX RT1060 Reference Manual, not PX4's NuttX-specific macros) and
+ * exposes tropic_community_led_red_set()/_blue_set(). Those two functions
+ * aren't hooked up to anything yet - mr_vmu_tropic's own default cerebri
+ * config doesn't drive its onboard RGB LED with any arm/safety/mode logic
+ * either (CEREBRI_RDD2_LIGHTING and CEREBRI_ACTUATE_LED_ARRAY are both
+ * disabled there too), so this matches it rather than falling short.
+ *
+ * RC_INPUT (Teensy pin 20, lpuart8 single-wire, RX pin doubles as ADC_A so
+ * only TX is pinctrl'd) has a "tbs,crsf" child node below, matching
+ * mr_vmu_tropic's own lpuart8/sbus0 node - the receiver protocol is a
+ * property of whatever module actually gets plugged in here, not something
+ * this board's own schematic can tell us, so change compatible/current-speed
+ * to "futaba,sbus"/100000 (inverted) instead if the real receiver is SBUS.
+ *
+ * Not wired, deferred:
+ *   - ADC_A/ADC_V (Teensy pins 21/22, AD_B1_11/AD_B1_08, ADC1_IN0/IN13):
+ *     cerebri's drivers/sense/power/main.c wants ONE devicetree sensor
+ *     device (alias power0) that reports both SENSOR_CHAN_VOLTAGE and
+ *     SENSOR_CHAN_CURRENT - Zephyr doesn't have a stock combined ADC-
+ *     voltage+current sensor binding, so this needs custom driver work.
+ */
+
+/dts-v1/;
+
+#include <nxp/imxrt/nxp_rt1060.dtsi>
+#include "tropic_community-pinctrl.dtsi"
+#include <freq.h>
+#include <mem.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+/ {
+	model = "NXP-Robotics Tropic Community VMU";
+	compatible = "nxp,mimxrt1062";
+
+	chosen {
+		zephyr,flash-controller = &ext_flash_ctrl;
+		zephyr,flash = &w25q64jvxgim;
+		/* teensy41's own default (&ocram, the 256K FlexRAM-carved
+		 * region) is too small for rdd2's full stack (casadi-generated
+		 * math, cmsis-dsp, networking, log_sdcard); &ocram2 is a
+		 * separate, dedicated 512K OCRAM block this chip also has.
+		 */
+		zephyr,sram = &ocram2;
+		zephyr,itcm = &itcm;
+		zephyr,dtcm = &dtcm;
+		/* Reverted back to USB CDC-ACM console for this test: the
+		 * lpuart5 switch was a separate, uncontrolled variable that
+		 * would confound a clean before/after test of the q0*dq vs
+		 * dq*q0 quaternion-formula hang. Restoring the exact original
+		 * condition (console on USB) with only the formula and the
+		 * EHCI bounded-retry mitigation varying.
+		 */
+		zephyr,console = &cdc_acm_uart0;
+		zephyr,shell-uart = &cdc_acm_uart0;
+		zephyr,canbus = &flexcan3;
+	};
+
+	/* DELETED: "board_led" / led0 (Teensy pin 13, GPIO_B0_03) was
+	 * inherited from the upstream teensy41 board's own default LED
+	 * definition, where pin 13 is genuinely free. On THIS carrier
+	 * board it isn't: the schematic's own SPI1_SCK net (feeding imu0,
+	 * see &lpspi4 below) is wired to that exact same physical pad.
+	 * Zephyr's gpio-leds driver configuring this pin as a plain GPIO
+	 * output at boot silently stole the pad away from its LPSPI4_SCK
+	 * alternate function, corrupting the SPI clock for imu0 - this was
+	 * the actual root cause of an extremely long-running mystery where
+	 * imu0 (and only imu0, never imu1 on a different, non-conflicting
+	 * bus) would reliably work for its first ~2 register accesses and
+	 * then silently stop responding for the rest of boot, on every
+	 * single unit tested. Do not reintroduce an LED on this pin.
+	 */
+
+	/* ARM safety switch, Teensy pin 32 (GPIO_B0_12 = GPIO2 IO12) */
+	gpio_keys {
+		compatible = "gpio-keys";
+
+		arming_button: button_0 {
+			label = "Arming Switch";
+			gpios = <&gpio2 12 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+
+	pwmleds {
+		compatible = "pwm-leds";
+
+		/* Buzzer, Teensy pin 29 (GPIO_EMC_31, FlexPWM3 submodule1 ch A) */
+		buzzer0: buzzer0 {
+			pwms = <&flexpwm3_pwm1 0 PWM_HZ(50) PWM_POLARITY_NORMAL>;
+		};
+
+		/* LED_G, Teensy pin 37 (GPIO_B1_03, FlexPWM2 submodule3 ch B) */
+		green_pwm_led: led_pwm_1 {
+			pwms = <&flexpwm2_pwm3 1 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
+			label = "Green LED";
+		};
+	};
+};
+
+/* WINBOND 8MB flash memory, same module as the upstream teensy41 board */
+&flexspi {
+	status = "okay";
+
+	reg = <0x402a8000 0x4000>, <0x60000000 DT_SIZE_M(8)>;
+
+	/* Controller node with the flash as a child, as upstream teensy41.dts:
+	 * Zephyr derives FLASH_BASE_ADDRESS (0x60000000) from the chosen flash
+	 * node's grandparent being the FlexSPI controller. With the flash
+	 * directly under &flexspi it silently fell back to 0x0, and the image
+	 * was linked where the boot ROM never looks.
+	 */
+	ext_flash_ctrl: flash-controller@0 {
+		compatible = "nxp,imx-flexspi-nor";
+		size = <DT_SIZE_M(8 * 8)>;
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(133)>;
+		status = "okay";
+		jedec-id = [ef 70 17];
+
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x0 0x60000000 DT_SIZE_M(8)>;
+
+		w25q64jvxgim: flash@0 {
+			compatible = "soc-nv-flash";
+			reg = <0x0 DT_SIZE_M(8)>;
+			erase-block-size = <4096>;
+			write-block-size = <1>;
+		};
+	};
+};
+
+&enet {
+	status = "okay";
+	pinctrl-0 = <&pinmux_enet>;
+	pinctrl-names = "default";
+};
+
+&enet_mac {
+	status = "okay";
+	nxp,unique-mac;
+	phy-connection-type = "rmii";
+	phy-handle = <&phy>;
+};
+
+&enet_mdio {
+	status = "okay";
+	pinctrl-0 = <&pinmux_enet_mdio>;
+	pinctrl-names = "default";
+
+	phy: phy@0 {
+		status = "okay";
+		compatible = "ti,dp83825";
+		reg = <0>;
+		reset-gpios = <&gpio2 14 GPIO_ACTIVE_LOW>;
+		int-gpios = <&gpio2 15 GPIO_ACTIVE_LOW>;
+		ti,interface-type = "rmii";
+		default-speeds = "100BASE Full-Duplex";
+	};
+};
+
+/* The USB1 EHCI controller alone can't drive the bus - it needs its PHY
+ * (disabled by default in the SoC dtsi) enabled and linked via phy-handle,
+ * or the host sees the device attach but every control transfer (even the
+ * initial descriptor read) times out. Calibration values match NXP's own
+ * mimxrt1060_evk board (same usbphy IP block, same RT1060 family).
+ */
+&usbphy1 {
+	status = "okay";
+	tx-d-cal = <12>;
+	tx-cal-45-dp-ohms = <6>;
+	tx-cal-45-dm-ohms = <6>;
+};
+
+zephyr_udc0: &usb1 {
+	status = "okay";
+	phy-handle = <&usbphy1>;
+
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+&usdhc1 {
+	status = "okay";
+	no-1-8-v;
+	pinctrl-0 = <&pinmux_usdhc1>;
+	pinctrl-1 = <&pinmux_usdhc1_slow>;
+	pinctrl-2 = <&pinmux_usdhc1_med>;
+	pinctrl-3 = <&pinmux_usdhc1_fast>;
+	pinctrl-names = "default", "slow", "med", "fast";
+
+	mmc {
+		compatible = "zephyr,sdmmc-disk";
+		disk-name = "SD";
+		status = "okay";
+	};
+};
+
+&edma0 {
+	status = "okay";
+};
+
+/* Isolated re-test: ONLY the watchdog, on its own, to check whether it alone
+ * (not the console switch, not the HAL fix - both already ruled out
+ * individually) is what stopped the SD logging hang in the earlier build.
+ */
+&wdog0 {
+	status = "okay";
+};
+&systick {
+	status = "okay";
+};
+
+/* DEBUG connector / console, Teensy pins 35 (TX) / 34 (RX) */
+&lpuart5 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_lpuart5>;
+	pinctrl-1 = <&pinmux_lpuart5_sleep>;
+	pinctrl-names = "default", "sleep";
+	current-speed = <115200>;
+};
+
+/* CAN connector (TJA1051 transceiver, net CAN_TX/CAN_RX, Teensy pins 31/30) */
+&flexcan3 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_flexcan3>;
+	pinctrl-names = "default";
+};
+
+/* Internal BARO_MAG_SDA/SCL bus (Teensy pins 25/24): BME280 barometer +
+ * BMM350 magnetometer
+ */
+&lpi2c4 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_lpi2c4>;
+	pinctrl-names = "default";
+
+	bme280: bme280@76 {
+		compatible = "bosch,bme280";
+		reg = <0x76>;
+	};
+
+	bmm350: bmm350@14 {
+		compatible = "bosch,bmm350";
+		reg = <0x14>;
+	};
+};
+
+/* External EXT_SDA/EXT_SCL connector, Teensy pins 18/19 - also the GPS
+ * connector's EXT_SCL/EXT_SDA pins (see the GPS connector schematic:
+ * BM10B-GHS-TBT pins 4/5), so the compass built into a Pixhawk-format
+ * GPS+compass module (e.g. Holybro M10's IST8310/IST8308) is reachable
+ * here, same bus mr_vmu_tropic.dts uses for its own external ist8310.
+ */
+&lpi2c1 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_lpi2c1>;
+	pinctrl-names = "default";
+
+	ist8310: ist8310@e {
+		compatible = "isentek,ist8310";
+		reg = <0xe>;
+	};
+};
+
+/* GPS connector, Teensy pins 15/14 */
+&lpuart2 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_lpuart2>;
+	pinctrl-1 = <&pinmux_lpuart2_sleep>;
+	pinctrl-names = "default", "sleep";
+	current-speed = <115200>;
+};
+
+/* Telemetry radio connector, Teensy pins 17/16/41/40 (TX/RX/RTS/CTS) */
+&lpuart3 {
+	status = "okay";
+	current-speed = <57600>;
+	pinctrl-0 = <&pinmux_lpuart3_telem>;
+	pinctrl-names = "default";
+	hw-flow-control;
+};
+
+/* RC receiver input, Teensy pin 20, single-wire (RX pin doubles as ADC_A).
+ * CRSF, matching mr_vmu_tropic.dts's own lpuart8 node - change compatible/
+ * current-speed to "futaba,sbus"/100000 (and mark the UART inverted) if the
+ * receiver actually plugged in here is SBUS, not CRSF.
+ */
+&lpuart8 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_lpuart8_rc_singlewire>;
+	pinctrl-names = "default";
+	single-wire;
+	current-speed = <420000>;
+
+	rc0: rc {
+		compatible = "tbs,crsf";
+
+		chan_1 {
+			channel = <1>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <1>;
+		};
+		chan_2 {
+			channel = <2>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <2>;
+		};
+		chan_3 {
+			channel = <3>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <3>;
+		};
+		chan_4 {
+			channel = <4>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <4>;
+		};
+		chan_5 {
+			channel = <5>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <5>;
+		};
+		chan_6 {
+			channel = <6>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <6>;
+		};
+		chan_7 {
+			channel = <7>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <7>;
+		};
+		chan_8 {
+			channel = <8>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <8>;
+		};
+		chan_9 {
+			channel = <9>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <9>;
+		};
+		chan_10 {
+			channel = <10>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <10>;
+		};
+		chan_11 {
+			channel = <11>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <11>;
+		};
+		chan_12 {
+			channel = <12>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <12>;
+		};
+		chan_13 {
+			channel = <13>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <13>;
+		};
+		chan_14 {
+			channel = <14>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <14>;
+		};
+		chan_15 {
+			channel = <15>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <15>;
+		};
+		chan_16 {
+			channel = <16>;
+			type = <INPUT_EV_ABS>;
+			zephyr,code = <16>;
+		};
+	};
+};
+
+/* Buzzer PWM, Teensy pin 29 (GPIO_EMC_31, FlexPWM3 submodule1 channel A) */
+&flexpwm3_pwm1 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_flexpwm3_pwm1_buzzer>;
+	pinctrl-names = "default";
+	nxp,prescaler = <128>;
+};
+
+/* LED_G PWM, Teensy pin 37 (GPIO_B1_03, FlexPWM2 submodule3 channel B) */
+&flexpwm2_pwm3 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_flexpwm2_pwm3_g>;
+	pinctrl-names = "default";
+	nxp,prescaler = <16>;
+};
+
+/* IMU 0, schematic net "SPI1_*", Teensy pins 10 (CS) / 13 (SCK) /
+ * 12 (MISO) / 11 (MOSI)
+ */
+&lpspi4 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_lpspi4>;
+	pinctrl-names = "default";
+
+	imu0: icm42670p@0 {
+		compatible = "invensense,icm42670p";
+		reg = <0>;
+		spi-max-frequency = <24000000>;
+		accel-hz = <100>;
+		accel-fs = <16>;
+		gyro-hz = <100>;
+		gyro-fs = <2000>;
+	};
+};
+
+/* IMU 1, schematic net "SPI2_*", Teensy pins 38 (CS) / 27 (SCK) /
+ * 39 (MISO) / 26 (MOSI)
+ */
+&lpspi3 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_lpspi3>;
+	pinctrl-names = "default";
+
+	imu1: icm42670p@0 {
+		compatible = "invensense,icm42670p";
+		reg = <0>;
+		spi-max-frequency = <24000000>;
+		accel-hz = <100>;
+		accel-fs = <16>;
+		gyro-hz = <100>;
+		gyro-fs = <2000>;
+	};
+};
+
+/* 5 DShot-capable ESC outputs: PWM_1 (pin4), PWM_2 (pin33), PWM_3 (pin5),
+ * PWM_5 (pin2), PWM_6 (pin3). PWM_4 (pin9) is not FlexIO-driven, see the
+ * header comment.
+ */
+&flexio1 {
+	status = "okay";
+
+	dshot: dshot {
+		compatible = "nxp,flexio-dshot";
+		pinctrl-0 = <&pinmux_dshot_tropic_community>;
+		pinctrl-names = "default";
+		status = "okay";
+		speed = <600>;
+
+		ch1 {
+			pin-id = <6>; /* GPIO_EMC_06 / PWM_1 / Teensy pin 4 */
+		};
+
+		ch2 {
+			pin-id = <7>; /* GPIO_EMC_07 / PWM_2 / Teensy pin 33 */
+		};
+
+		ch3 {
+			pin-id = <8>; /* GPIO_EMC_08 / PWM_3 / Teensy pin 5 */
+		};
+
+		ch4 {
+			pin-id = <4>; /* GPIO_EMC_04 / PWM_5 / Teensy pin 2 */
+		};
+
+		ch5 {
+			/* GPIO_EMC_05 / PWM_6 / Teensy pin 3, unused by default */
+			pin-id = <5>;
+		};
+	};
+};

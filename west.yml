@@ -9,11 +9,16 @@ manifest:
       url-base: https://github.com/zephyrproject-rtos
     - name: cognipilot
       url-base: https://github.com/CogniPilot
+    - name: pa-spaceline
+      url-base: https://github.com/pa-spaceline
 
   projects:
     - name: zephyr
-      remote: cognipilot
-      revision: e665e099a421a94431052312ab3b53904886a761 # crsf-rx-idle-flush: crsf hardening plus RX flush from the idle line
+      remote: pa-spaceline
+      # branch tropic-community-preflight: cognipilot e665e099 (crsf-rx-idle-flush)
+      # plus the mcux_lpuart single-wire RSRC fix, without which tropic_community
+      # hangs at boot in CRSF init.
+      revision: 4b934f142d4cadb69d0ad9430954e9a142b75ae1
       path: zephyr
       west-commands: scripts/west-commands.yml
     - name: cmsis
