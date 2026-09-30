@@ -345,9 +345,32 @@ bool rdd2_imu_stream_lockstep_at_target(void)
 }
 
 #if !defined(CONFIG_RDD2_LOCKSTEP)
+/* Polled pacing for IMUs without the stream path. The deadline advances by one
+ * control period per tick and is slept to as an absolute kernel tick: a
+ * relative sleep gets an extra tick of round-up, which with the fetch and the
+ * loop work stretched every tick to about 1.9 ms (533 Hz for an 800 Hz loop).
+ * dt is what actually elapsed between two reads, from the cycle counter. */
+static uint64_t g_poll_deadline_ns; /* kernel uptime domain */
+static uint64_t g_poll_last_sample_ns;
+static bool g_poll_have_last_sample;
+
 static uint64_t imu_timestamp_now_ns(void)
 {
 	return k_cyc_to_ns_floor64(k_cycle_get_64());
+}
+
+static void imu_poll_wait_deadline(void)
+{
+	int64_t now_ticks = k_uptime_ticks();
+	int64_t deadline_ticks = (int64_t)k_ns_to_ticks_ceil64(g_poll_deadline_ns);
+
+	if (deadline_ticks > now_ticks) {
+		k_sleep(K_TIMEOUT_ABS_TICKS(deadline_ticks));
+	} else {
+		/* Overran, or first call: re-anchor instead of bursting to catch up. */
+		g_poll_deadline_ns = k_ticks_to_ns_floor64(now_ticks);
+	}
+	g_poll_deadline_ns += RDD2_CONTROL_PERIOD_NS;
 }
 #endif
 
@@ -453,7 +476,7 @@ bool rdd2_imu_stream_wait_next(rdd2_vec3f_t *gyro, rdd2_vec3f_t *accel, float *d
 		next_boot_time_ns = g_lockstep_target_boot_time_ns;
 	}
 #else
-	k_sleep(K_NSEC(RDD2_CONTROL_PERIOD_NS));
+	imu_poll_wait_deadline();
 #endif
 	*dt = RDD2_CONTROL_DT_S;
 	if (interrupt_timestamp_ns != NULL) {
@@ -481,8 +504,16 @@ bool rdd2_imu_stream_wait_next(rdd2_vec3f_t *gyro, rdd2_vec3f_t *accel, float *d
 		*interrupt_timestamp_ns = g_lockstep_current_boot_time_ns;
 	}
 #else
+	uint64_t sample_ns = imu_timestamp_now_ns();
+
+	if (g_poll_have_last_sample && sample_ns > g_poll_last_sample_ns) {
+		*dt = (float)(sample_ns - g_poll_last_sample_ns) * 1.0e-9f;
+	}
+	g_poll_last_sample_ns = sample_ns;
+	g_poll_have_last_sample = true;
+
 	if (interrupt_timestamp_ns != NULL) {
-		*interrupt_timestamp_ns = imu_timestamp_now_ns();
+		*interrupt_timestamp_ns = sample_ns;
 	}
 #endif
 
